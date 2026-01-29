@@ -1,7 +1,6 @@
 from astrbot.api import FunctionTool, logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image
-from dataclasses import dataclass, field
 import json
 
 async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
@@ -80,23 +79,23 @@ def _process_url_string(url: str):
     else:
         return {"type": "url", "data": url}
 
-@dataclass
 class GetImageFromContextTool(FunctionTool):
-    name: str = "get_image_from_context"
-    description: str = "Get the image URL or Base64 content from the current conversation context. Use this when you need to process an image that the user has sent. It returns a list of images found."
-    parameters: dict = field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {
-                "look_back_limit": {
-                    "type": "integer",
-                    "description": "How many recent messages to check for images. Default is 5.",
-                    "default": 5
-                }
-            },
-            "required": [],
-        }
-    )
+    def __init__(self):
+        super().__init__(
+            name="get_image_from_context",
+            description="Get the image URL or Base64 content from the current conversation context. Use this when you need to process an image that the user has sent. It returns a list of images found.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "look_back_limit": {
+                        "type": "integer",
+                        "description": "How many recent messages to check for images. Default is 5.",
+                        "default": 5
+                    }
+                },
+                "required": [],
+            }
+        )
 
     async def run(self, event: AstrMessageEvent, look_back_limit: int = 5):
         # Fetch raw data
