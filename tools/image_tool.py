@@ -1,7 +1,10 @@
 from astrbot.api import FunctionTool, logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image
+from astrbot.core.utils.io import download_image_by_url
 import json
+import base64
+import os
 
 async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
     """
@@ -15,7 +18,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     if event.message_obj and event.message_obj.message:
         for component in event.message_obj.message:
             if isinstance(component, Image):
-                res = _process_image(component)
+                res = await _process_image(component)
                 if res:
                     images.append(res)
     
@@ -43,7 +46,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                                 img_url_obj = part.get("image_url", {})
                                 url = img_url_obj.get("url")
                                 if url:
-                                    res = _process_url_string(url)
+                                    res = await _process_url_string(url)
                                     if res:
                                         images.append(res)
                     
@@ -58,13 +61,18 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     
     return images
 
-def _process_image(image_comp: Image):
+async def _process_image(image_comp: Image):
+    # Check internal base64 file property first
+    if image_comp.file and image_comp.file.startswith("base64://"):
+        return {"type": "base64", "data": image_comp.file[9:]}
+    
     url = image_comp.url or image_comp.file
-    return _process_url_string(url)
+    return await _process_url_string(url)
 
-def _process_url_string(url: str):
+async def _process_url_string(url: str):
     if not url:
         return None
+        
     if url.startswith("base64://"):
         return {"type": "base64", "data": url[9:]}
     elif url.startswith("data:image"):
@@ -73,8 +81,32 @@ def _process_url_string(url: str):
         else:
             return {"type": "url", "data": url}
     elif url.startswith("http"):
+        # Force download and convert to base64
+        try:
+            # logger.info(f"Downloading image from {url}...")
+            file_path = await download_image_by_url(url)
+            if file_path and os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    data = f.read()
+                    b64_str = base64.b64encode(data).decode('utf-8')
+                return {"type": "base64", "data": b64_str}
+        except Exception as e:
+            logger.error(f"Failed to download image from {url}: {e}")
+            # Fallback to URL if download fails
+            return {"type": "url", "data": url}
+            
         return {"type": "url", "data": url}
     elif url.startswith("file:///"):
+        # For local files, also try convert to base64
+        try:
+            path = url[8:]
+            if os.path.exists(path):
+                 with open(path, "rb") as f:
+                    data = f.read()
+                    b64_str = base64.b64encode(data).decode('utf-8')
+                 return {"type": "base64", "data": b64_str}
+        except Exception:
+            pass
         return {"type": "path", "data": url[8:]}
     else:
         return {"type": "url", "data": url}
