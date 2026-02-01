@@ -9,23 +9,28 @@ import os
 async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
     """
     Extracts images from the event context.
-    Returns list of dicts with keys: 'type' (url/base64/path), 'data', 'source'.
-    This function returns RAW/REAL data for the Hook to use.
+    Returns list of dicts.
     """
     images = []
     
     # 1. Check current message
     if event.message_obj and event.message_obj.message:
+        logger.info(f"[ImageTool] Checking current message chain (len={len(event.message_obj.message)})...")
         for component in event.message_obj.message:
             if isinstance(component, Image):
+                logger.info(f"[ImageTool] Found Image component: file={component.file}, url={component.url}, path={component.path}")
                 res = await _process_image(component)
                 if res:
+                    logger.info(f"[ImageTool] Processed Image component: type={res['type']}, source={res.get('source')}")
                     images.append(res)
+    else:
+        logger.info("[ImageTool] Current message object or chain is empty.")
     
     if images:
         return images
 
     # 2. Check history
+    logger.info("[ImageTool] Checking history...")
     try:
         ctx = event.context
         conv_mgr = ctx.conversation_manager
@@ -45,6 +50,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                                 img_url_obj = part.get("image_url", {})
                                 url = img_url_obj.get("url")
                                 if url:
+                                    logger.info(f"[ImageTool] Found image in history: {url}")
                                     res = await _process_url_string(url)
                                     if res:
                                         images.append(res)
@@ -52,22 +58,16 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                     count += 1
                     if count >= look_back_limit: break
     except Exception as e:
-        logger.error(f"Error retrieving history: {e}")
+        logger.error(f"[ImageTool] Error retrieving history: {e}")
     
     return images
 
 async def _process_image(image_comp: Image):
-    """
-    Priorities:
-    1. Raw Base64 in message body (base64://)
-    2. Local Cached File (path) -> convert to base64 immediately for consistency
-    3. URL
-    """
     # 1. Raw Base64
     if image_comp.file and image_comp.file.startswith("base64://"):
         return {"type": "base64", "data": image_comp.file[9:], "source": "raw_msg"}
     
-    # 2. Local Cached Path (e.g., Telegram images)
+    # 2. Local Cached Path
     if image_comp.path and os.path.exists(image_comp.path):
         try:
             with open(image_comp.path, "rb") as f:
@@ -89,7 +89,6 @@ async def _process_url_string(url: str):
         if "base64," in url:
             return {"type": "base64", "data": url.split("base64,")[1], "source": "data_uri"}
     elif url.startswith("file:///"):
-        # Local file URI
         path = url[8:]
         if os.path.exists(path):
             try:
@@ -99,7 +98,6 @@ async def _process_url_string(url: str):
             except: pass
         return {"type": "path", "data": path, "source": "path_uri"}
     
-    # Standard URL
     return {"type": "url", "data": url, "source": "http_url"}
 
 class GetImageFromContextTool(FunctionTool):
@@ -134,14 +132,9 @@ class GetImageFromContextTool(FunctionTool):
         
         results = []
         for img in images:
-            # If asking for URL and we have a valid HTTP URL, return it
             if return_type == "url" and img['type'] == 'url':
                 results.append(img)
-            
-            # If asking for Base64 OR we only have Base64/Path (no URL available)
             else:
-                # TOKEN SAVING: Return a placeholder!
-                # Do NOT return the raw base64 string here.
                 results.append({
                     "type": "base64_placeholder",
                     "data": "IMAGE_DATA_READY_INTERNAL",
