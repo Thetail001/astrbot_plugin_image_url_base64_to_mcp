@@ -92,8 +92,6 @@ class GetImageFromContextTool(FunctionTool):
         )
 
     async def run(self, event: AstrMessageEvent, look_back_limit: int = 5, return_type: str = "url"):
-        # Just check if images exist, don't fetch full data yet to save resources
-        # Actually we need to fetch to know if it's URL or Base64
         images = await extract_images_from_event(event, look_back_limit)
         
         if not images:
@@ -107,8 +105,8 @@ class GetImageFromContextTool(FunctionTool):
                 # TOKEN SAVING: Return a Magic Placeholder
                 results.append({
                     "type": "base64_placeholder",
-                    "data": "base64://ASTRBOT_PLUGIN_CACHE_PENDING", # Looks like a valid URI but needs injection
-                    "instruction": "Image is ready. Please pass 'base64://ASTRBOT_PLUGIN_CACHE_PENDING' to the target tool. The system will replace it with real data."
+                    "data": "base64://ASTRBOT_PLUGIN_CACHE_PENDING", 
+                    "instruction": "Image is ready. Please pass 'base64://ASTRBOT_PLUGIN_CACHE_PENDING' to the target tool."
                 })
         
         return json.dumps(results)
