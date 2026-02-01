@@ -7,13 +7,13 @@ import base64
 import os
 import asyncio
 
-async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
+async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5, prefer_base64: bool = False):
     images = []
     
     if event.message_obj and event.message_obj.message:
         for component in event.message_obj.message:
             if isinstance(component, Image):
-                res = await _process_image(component)
+                res = await _process_image(component, prefer_base64)
                 if res: images.append(res)
     
     if images: return images
@@ -37,7 +37,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                                 img_url_obj = part.get("image_url", {})
                                 url = img_url_obj.get("url")
                                 if url:
-                                    res = await _process_url_string(url, force_download=True)
+                                    res = await _process_url_string(url, force_download=prefer_base64)
                                     if res: images.append(res)
                     if images: break
                     count += 1
@@ -47,7 +47,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     
     return images
 
-async def _process_image(image_comp: Image):
+async def _process_image(image_comp: Image, prefer_base64: bool = False):
     if image_comp.file and image_comp.file.startswith("base64://"):
         return {"type": "base64", "data": image_comp.file[9:]}
     if image_comp.path and os.path.exists(image_comp.path):
@@ -56,13 +56,14 @@ async def _process_image(image_comp: Image):
                 b64_str = base64.b64encode(f.read()).decode('utf-8')
             return {"type": "base64", "data": b64_str}
         except: pass
-    return await _process_url_string(image_comp.url, force_download=True)
+    return await _process_url_string(image_comp.url, force_download=prefer_base64)
 
 async def _process_url_string(url: str, force_download=False):
     if not url: return None
     if url.startswith("base64://"):
         return {"type": "base64", "data": url[9:]}
     if url.startswith("http"):
+        # Only download if it's a restricted URL OR if we explicitly need Base64 data (Hook mode)
         is_restricted = "api.telegram.org" in url or "localhost" in url or force_download
         if is_restricted:
             try:
@@ -92,7 +93,8 @@ class GetImageFromContextTool(FunctionTool):
         )
 
     async def run(self, event: AstrMessageEvent, look_back_limit: int = 5, return_type: str = "url"):
-        images = await extract_images_from_event(event, look_back_limit)
+        # When just querying for URL, we don't prefer base64 to save download time
+        images = await extract_images_from_event(event, look_back_limit, prefer_base64=False)
         
         if not images:
             return "No images found."
