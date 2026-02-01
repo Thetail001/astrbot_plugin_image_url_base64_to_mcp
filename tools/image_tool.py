@@ -9,28 +9,22 @@ import os
 async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
     """
     Extracts images from the event context.
-    Returns list of dicts.
+    Attempts to fetch REAL Base64 data if possible (downloading if necessary).
     """
     images = []
     
     # 1. Check current message
     if event.message_obj and event.message_obj.message:
-        logger.info(f"[ImageTool] Checking current message chain (len={len(event.message_obj.message)})...")
         for component in event.message_obj.message:
             if isinstance(component, Image):
-                logger.info(f"[ImageTool] Found Image component: file={component.file}, url={component.url}, path={component.path}")
                 res = await _process_image(component)
                 if res:
-                    logger.info(f"[ImageTool] Processed Image component: type={res['type']}, source={res.get('source')}")
                     images.append(res)
-    else:
-        logger.info("[ImageTool] Current message object or chain is empty.")
     
     if images:
         return images
 
     # 2. Check history
-    logger.info("[ImageTool] Checking history...")
     try:
         ctx = event.context
         conv_mgr = ctx.conversation_manager
@@ -50,8 +44,8 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                                 img_url_obj = part.get("image_url", {})
                                 url = img_url_obj.get("url")
                                 if url:
-                                    logger.info(f"[ImageTool] Found image in history: {url}")
-                                    res = await _process_url_string(url)
+                                    # Force download for history items to ensure we get Base64
+                                    res = await _process_url_string(url, force_download=True)
                                     if res:
                                         images.append(res)
                     if images: break
@@ -71,16 +65,15 @@ async def _process_image(image_comp: Image):
     if image_comp.path and os.path.exists(image_comp.path):
         try:
             with open(image_comp.path, "rb") as f:
-                data = f.read()
-                b64_str = base64.b64encode(data).decode('utf-8')
+                b64_str = base64.b64encode(f.read()).decode('utf-8')
             return {"type": "base64", "data": b64_str, "source": "local_cache"}
         except Exception as e:
             logger.warning(f"Failed to read local path {image_comp.path}: {e}")
 
-    # 3. URL
-    return await _process_url_string(image_comp.url)
+    # 3. URL (Force download to ensure availability)
+    return await _process_url_string(image_comp.url, force_download=True)
 
-async def _process_url_string(url: str):
+async def _process_url_string(url: str, force_download=False):
     if not url: return None
     
     if url.startswith("base64://"):
@@ -98,13 +91,32 @@ async def _process_url_string(url: str):
             except: pass
         return {"type": "path", "data": path, "source": "path_uri"}
     
-    return {"type": "url", "data": url, "source": "http_url"}
+    if url.startswith("http"):
+        # If force_download is True, or it looks restricted, try to download
+        is_restricted = "api.telegram.org" in url or "localhost" in url or "127.0.0.1" in url or force_download
+        
+        if is_restricted:
+            try:
+                # logger.info(f"Downloading {url}...")
+                file_path = await download_image_by_url(url)
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        b64_str = base64.b64encode(f.read()).decode('utf-8')
+                    return {"type": "base64", "data": b64_str, "source": "downloaded"}
+            except Exception as e:
+                logger.error(f"[ImageTool] Failed to download {url}: {e}")
+                # Return URL as fallback
+                return {"type": "url", "data": url, "source": "http_url_failed_dl"}
+        
+        return {"type": "url", "data": url, "source": "http_url"}
+    
+    return {"type": "url", "data": url, "source": "unknown"}
 
 class GetImageFromContextTool(FunctionTool):
     def __init__(self):
         super().__init__(
             name="get_image_from_context",
-            description="Get image data from context. Returns URL by default. If URL fails (e.g., restricted access), retry with return_type='base64'.",
+            description="Get image data from context. Returns URL by default. If URL fails, use return_type='base64' to get raw data.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -116,7 +128,7 @@ class GetImageFromContextTool(FunctionTool):
                     "return_type": {
                         "type": "string",
                         "enum": ["url", "base64"],
-                        "description": "Default 'url'. Use 'base64' ONLY if URL fails.",
+                        "description": "Default 'url'. Use 'base64' to get the full image data (fixes download issues).",
                         "default": "url"
                     }
                 },
@@ -135,11 +147,8 @@ class GetImageFromContextTool(FunctionTool):
             if return_type == "url" and img['type'] == 'url':
                 results.append(img)
             else:
-                results.append({
-                    "type": "base64_placeholder",
-                    "data": "IMAGE_DATA_READY_INTERNAL",
-                    "source": img.get('source', 'unknown'),
-                    "instruction": "I have the image data ready internally. Please call your target tool with this placeholder string: 'IMAGE_DATA_READY_INTERNAL'. The system will automatically inject the real data."
-                })
+                # Direct return of Base64 data!
+                # NO PLACEHOLDERS.
+                results.append(img)
         
         return json.dumps(results)
