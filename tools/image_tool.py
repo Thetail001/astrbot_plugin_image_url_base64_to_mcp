@@ -48,14 +48,24 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     return images
 
 async def _process_image(image_comp: Image, prefer_base64: bool = False):
+    # Fix: If we prefer URL (default) and valid URL exists, return it immediately.
+    # Even if we have a local cached file, we shouldn't return Base64 unless asked.
+    if not prefer_base64 and image_comp.url and image_comp.url.startswith("http"):
+        return {"type": "url", "data": image_comp.url}
+
+    # 1. Raw Base64
     if image_comp.file and image_comp.file.startswith("base64://"):
         return {"type": "base64", "data": image_comp.file[9:]}
+    
+    # 2. Local Cached Path
     if image_comp.path and os.path.exists(image_comp.path):
         try:
             with open(image_comp.path, "rb") as f:
                 b64_str = base64.b64encode(f.read()).decode('utf-8')
             return {"type": "base64", "data": b64_str}
         except: pass
+    
+    # 3. URL fallback
     return await _process_url_string(image_comp.url, force_download=prefer_base64)
 
 async def _process_url_string(url: str, force_download=False):
@@ -63,7 +73,6 @@ async def _process_url_string(url: str, force_download=False):
     if url.startswith("base64://"):
         return {"type": "base64", "data": url[9:]}
     if url.startswith("http"):
-        # Only download if it's a restricted URL OR if we explicitly need Base64 data (Hook mode)
         is_restricted = "api.telegram.org" in url or "localhost" in url or force_download
         if is_restricted:
             try:
@@ -93,8 +102,9 @@ class GetImageFromContextTool(FunctionTool):
         )
 
     async def run(self, event: AstrMessageEvent, look_back_limit: int = 5, return_type: str = "url"):
-        # When just querying for URL, we don't prefer base64 to save download time
-        images = await extract_images_from_event(event, look_back_limit, prefer_base64=False)
+        # Explicitly pass prefer_base64=False when return_type is 'url'
+        prefer_b64 = (return_type == "base64")
+        images = await extract_images_from_event(event, look_back_limit, prefer_base64=prefer_b64)
         
         if not images:
             return "No images found."
@@ -104,7 +114,6 @@ class GetImageFromContextTool(FunctionTool):
             if return_type == "url" and img['type'] == 'url':
                 results.append(img)
             else:
-                # TOKEN SAVING: Return a Magic Placeholder
                 results.append({
                     "type": "base64_placeholder",
                     "data": "base64://ASTRBOT_PLUGIN_CACHE_PENDING", 
