@@ -5,6 +5,7 @@ from astrbot.core.utils.io import download_image_by_url
 import json
 import base64
 import os
+import asyncio
 
 async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
     """
@@ -15,10 +16,13 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     
     # 1. Check current message
     if event.message_obj and event.message_obj.message:
+        logger.info(f"[ImageTool] Checking current message (len={len(event.message_obj.message)})")
         for component in event.message_obj.message:
             if isinstance(component, Image):
+                logger.info(f"[ImageTool] Found Image component: url={component.url}, path={component.path}")
                 res = await _process_image(component)
                 if res:
+                    logger.info(f"[ImageTool] Processed: {res.get('type')}")
                     images.append(res)
     
     if images:
@@ -35,6 +39,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
         if conversation and conversation.history:
             history_list = json.loads(conversation.history)
             count = 0
+            logger.info(f"[ImageTool] Checking history (limit={look_back_limit})...")
             for msg in reversed(history_list):
                 if msg.get("role") == "user":
                     content = msg.get("content")
@@ -44,6 +49,7 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                                 img_url_obj = part.get("image_url", {})
                                 url = img_url_obj.get("url")
                                 if url:
+                                    logger.info(f"[ImageTool] Found history URL: {url}")
                                     # Force download for history items to ensure we get Base64
                                     res = await _process_url_string(url, force_download=True)
                                     if res:
@@ -68,7 +74,7 @@ async def _process_image(image_comp: Image):
                 b64_str = base64.b64encode(f.read()).decode('utf-8')
             return {"type": "base64", "data": b64_str, "source": "local_cache"}
         except Exception as e:
-            logger.warning(f"Failed to read local path {image_comp.path}: {e}")
+            logger.warning(f"[ImageTool] Failed to read local path {image_comp.path}: {e}")
 
     # 3. URL (Force download to ensure availability)
     return await _process_url_string(image_comp.url, force_download=True)
@@ -97,15 +103,19 @@ async def _process_url_string(url: str, force_download=False):
         
         if is_restricted:
             try:
-                # logger.info(f"Downloading {url}...")
-                file_path = await download_image_by_url(url)
+                logger.info(f"[ImageTool] Downloading {url} with 15s timeout...")
+                file_path = await asyncio.wait_for(download_image_by_url(url), timeout=15.0)
+                
                 if file_path and os.path.exists(file_path):
                     with open(file_path, "rb") as f:
                         b64_str = base64.b64encode(f.read()).decode('utf-8')
+                    logger.info("[ImageTool] Download success.")
                     return {"type": "base64", "data": b64_str, "source": "downloaded"}
+            except asyncio.TimeoutError:
+                logger.error(f"[ImageTool] Download timed out for {url}")
+                return {"type": "url", "data": url, "source": "http_url_timeout"}
             except Exception as e:
                 logger.error(f"[ImageTool] Failed to download {url}: {e}")
-                # Return URL as fallback
                 return {"type": "url", "data": url, "source": "http_url_failed_dl"}
         
         return {"type": "url", "data": url, "source": "http_url"}
@@ -137,6 +147,7 @@ class GetImageFromContextTool(FunctionTool):
         )
 
     async def run(self, event: AstrMessageEvent, look_back_limit: int = 5, return_type: str = "url"):
+        logger.info(f"[ImageTool] run called with return_type={return_type}")
         images = await extract_images_from_event(event, look_back_limit)
         
         if not images:
@@ -147,8 +158,6 @@ class GetImageFromContextTool(FunctionTool):
             if return_type == "url" and img['type'] == 'url':
                 results.append(img)
             else:
-                # Direct return of Base64 data!
-                # NO PLACEHOLDERS.
                 results.append(img)
         
         return json.dumps(results)
