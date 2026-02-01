@@ -8,9 +8,9 @@ import os
 
 async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5):
     """
-    Extracts images from the event context (current message + history).
-    Returns a list of dicts: {"type": "url"|"base64"|"path", "data": "..."}
-    Note: This returns the RAW data.
+    Extracts images from the event context.
+    Returns list of dicts with keys: 'type' (url/base64/path), 'data', 'source'.
+    This function returns RAW/REAL data for the Hook to use.
     """
     images = []
     
@@ -22,7 +22,6 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                 if res:
                     images.append(res)
     
-    # If we found images in current message, usually that's what we want.
     if images:
         return images
 
@@ -49,135 +48,105 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
                                     res = await _process_url_string(url)
                                     if res:
                                         images.append(res)
-                    
-                    if images:
-                        break
-                    
+                    if images: break
                     count += 1
-                    if count >= look_back_limit:
-                        break
+                    if count >= look_back_limit: break
     except Exception as e:
-        logger.error(f"Error retrieving history in extract_images_from_event: {e}")
+        logger.error(f"Error retrieving history: {e}")
     
     return images
 
 async def _process_image(image_comp: Image):
-    # Priority 1: Local Cached File (AstrBot has already downloaded it)
-    # This solves the Telegram URL inaccessible issue perfectly because we use the local copy.
+    """
+    Priorities:
+    1. Raw Base64 in message body (base64://)
+    2. Local Cached File (path) -> convert to base64 immediately for consistency
+    3. URL
+    """
+    # 1. Raw Base64
+    if image_comp.file and image_comp.file.startswith("base64://"):
+        return {"type": "base64", "data": image_comp.file[9:], "source": "raw_msg"}
+    
+    # 2. Local Cached Path (e.g., Telegram images)
     if image_comp.path and os.path.exists(image_comp.path):
         try:
             with open(image_comp.path, "rb") as f:
                 data = f.read()
                 b64_str = base64.b64encode(data).decode('utf-8')
-            return {"type": "base64", "data": b64_str}
+            return {"type": "base64", "data": b64_str, "source": "local_cache"}
         except Exception as e:
-            logger.warning(f"Failed to read local image path {image_comp.path}: {e}")
+            logger.warning(f"Failed to read local path {image_comp.path}: {e}")
 
-    # Priority 2: Internal File Attribute (Base64 or Local Path)
-    if image_comp.file:
-        if image_comp.file.startswith("base64://"):
-            return {"type": "base64", "data": image_comp.file[9:]}
-        
-        if image_comp.file.startswith("file:///"):
-            local_path = image_comp.file[8:]
-            if os.path.exists(local_path):
-                try:
-                    with open(local_path, "rb") as f:
-                        data = f.read()
-                        b64_str = base64.b64encode(data).decode('utf-8')
-                    return {"type": "base64", "data": b64_str}
-                except Exception:
-                    pass
-            return {"type": "path", "data": local_path}
-
-    # Priority 3: URL
+    # 3. URL
     return await _process_url_string(image_comp.url)
 
 async def _process_url_string(url: str):
-    if not url:
-        return None
-        
+    if not url: return None
+    
     if url.startswith("base64://"):
-        return {"type": "base64", "data": url[9:]}
+        return {"type": "base64", "data": url[9:], "source": "raw_url"}
     elif url.startswith("data:image"):
         if "base64," in url:
-            return {"type": "base64", "data": url.split("base64,")[1]}
-        else:
-            return {"type": "url", "data": url}
-    elif url.startswith("http"):
-        # Smart Logic:
-        # If it's a Telegram API URL or Localhost, the remote MCP server likely CANNOT access it.
-        # In these cases, we MUST download and convert to Base64.
-        # Otherwise, keep it as a URL to be lightweight.
-        
-        is_restricted = "api.telegram.org" in url or "localhost" in url or "127.0.0.1" in url or "0.0.0.0" in url
-        
-        if is_restricted:
-            try:
-                # logger.info(f"Downloading restricted image from {url}...")
-                file_path = await download_image_by_url(url)
-                if file_path and os.path.exists(file_path):
-                    with open(file_path, "rb") as f:
-                        data = f.read()
-                        b64_str = base64.b64encode(data).decode('utf-8')
-                    return {"type": "base64", "data": b64_str}
-            except Exception as e:
-                logger.error(f"Failed to download image from {url}: {e}")
-                # Fallback to URL
-                return {"type": "url", "data": url}
-        
-        # If it's a standard public URL, return it as is.
-        return {"type": "url", "data": url}
-        
+            return {"type": "base64", "data": url.split("base64,")[1], "source": "data_uri"}
     elif url.startswith("file:///"):
-        # Same logic for file protocol in URL string
-        try:
-            path = url[8:]
-            if os.path.exists(path):
-                 with open(path, "rb") as f:
-                    data = f.read()
-                    b64_str = base64.b64encode(data).decode('utf-8')
-                 return {"type": "base64", "data": b64_str}
-        except Exception:
-            pass
-        return {"type": "path", "data": url[8:]}
-    else:
-        return {"type": "url", "data": url}
+        # Local file URI
+        path = url[8:]
+        if os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    b64_str = base64.b64encode(f.read()).decode('utf-8')
+                return {"type": "base64", "data": b64_str, "source": "local_file_uri"}
+            except: pass
+        return {"type": "path", "data": path, "source": "path_uri"}
+    
+    # Standard URL
+    return {"type": "url", "data": url, "source": "http_url"}
 
 class GetImageFromContextTool(FunctionTool):
     def __init__(self):
         super().__init__(
             name="get_image_from_context",
-            description="Get the image URL or Base64 content from the current conversation context. Use this when you need to process an image that the user has sent. It returns a list of images found.",
+            description="Get image data from context. Returns URL by default. If URL fails (e.g., restricted access), retry with return_type='base64'.",
             parameters={
                 "type": "object",
                 "properties": {
                     "look_back_limit": {
                         "type": "integer",
-                        "description": "How many recent messages to check for images. Default is 5.",
+                        "description": "Messages to look back.",
                         "default": 5
+                    },
+                    "return_type": {
+                        "type": "string",
+                        "enum": ["url", "base64"],
+                        "description": "Default 'url'. Use 'base64' ONLY if URL fails.",
+                        "default": "url"
                     }
                 },
                 "required": [],
             }
         )
 
-    async def run(self, event: AstrMessageEvent, look_back_limit: int = 5):
-        # Fetch raw data
+    async def run(self, event: AstrMessageEvent, look_back_limit: int = 5, return_type: str = "url"):
         images = await extract_images_from_event(event, look_back_limit)
         
         if not images:
-            return "No images found in the recent context."
+            return "No images found."
         
-        # Process specifically for LLM consumption (Token Saving)
-        safe_images = []
+        results = []
         for img in images:
-            safe_img = img.copy()
-            if safe_img['type'] == 'base64':
-                data_len = len(safe_img['data'])
-                # Replace raw data with a token-safe placeholder
-                safe_img['data'] = f"<BASE64_IMAGE_DATA_HIDDEN_SIZE_{data_len}_BYTES>"
-                safe_img['instruction'] = "I have located the image data. Please call the target tool with an empty string (or 'placeholder') for the image/url argument. The system will automatically inject the real data during execution."
-            safe_images.append(safe_img)
+            # If asking for URL and we have a valid HTTP URL, return it
+            if return_type == "url" and img['type'] == 'url':
+                results.append(img)
+            
+            # If asking for Base64 OR we only have Base64/Path (no URL available)
+            else:
+                # TOKEN SAVING: Return a placeholder!
+                # Do NOT return the raw base64 string here.
+                results.append({
+                    "type": "base64_placeholder",
+                    "data": "IMAGE_DATA_READY_INTERNAL",
+                    "source": img.get('source', 'unknown'),
+                    "instruction": "I have the image data ready internally. Please call your target tool with this placeholder string: 'IMAGE_DATA_READY_INTERNAL'. The system will automatically inject the real data."
+                })
         
-        return json.dumps(safe_images)
+        return json.dumps(results)
