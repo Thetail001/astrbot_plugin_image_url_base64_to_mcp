@@ -49,15 +49,12 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
 
 async def _process_image(image_comp: Image, prefer_base64: bool = False):
     # Fix: If we prefer URL (default) and valid URL exists, return it immediately.
-    # Even if we have a local cached file, we shouldn't return Base64 unless asked.
     if not prefer_base64 and image_comp.url and image_comp.url.startswith("http"):
         return {"type": "url", "data": image_comp.url}
 
-    # 1. Raw Base64
     if image_comp.file and image_comp.file.startswith("base64://"):
         return {"type": "base64", "data": image_comp.file[9:]}
     
-    # 2. Local Cached Path
     if image_comp.path and os.path.exists(image_comp.path):
         try:
             with open(image_comp.path, "rb") as f:
@@ -65,7 +62,6 @@ async def _process_image(image_comp: Image, prefer_base64: bool = False):
             return {"type": "base64", "data": b64_str}
         except: pass
     
-    # 3. URL fallback
     return await _process_url_string(image_comp.url, force_download=prefer_base64)
 
 async def _process_url_string(url: str, force_download=False):
@@ -90,19 +86,23 @@ class GetImageFromContextTool(FunctionTool):
     def __init__(self):
         super().__init__(
             name="get_image_from_context",
-            description="Get image data. Default returns URL. If URL fails, use return_type='base64'.",
+            description="Extracts the image URL from the conversation context. ALWAYS use the default 'url' mode first to save resources. Only use 'base64' mode if the URL proves to be inaccessible by other tools.",
             parameters={
                 "type": "object",
                 "properties": {
                     "look_back_limit": { "type": "integer", "default": 5 },
-                    "return_type": { "type": "string", "enum": ["url", "base64"], "default": "url" }
+                    "return_type": { 
+                        "type": "string", 
+                        "enum": ["url", "base64"], 
+                        "description": "Default is 'url'. Set to 'base64' ONLY when the 'url' has failed.",
+                        "default": "url" 
+                    }
                 },
                 "required": [],
             }
         )
 
     async def run(self, event: AstrMessageEvent, look_back_limit: int = 5, return_type: str = "url"):
-        # Explicitly pass prefer_base64=False when return_type is 'url'
         prefer_b64 = (return_type == "base64")
         images = await extract_images_from_event(event, look_back_limit, prefer_base64=prefer_b64)
         
