@@ -62,12 +62,36 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     return images
 
 async def _process_image(image_comp: Image):
-    # Check internal base64 file property first
-    if image_comp.file and image_comp.file.startswith("base64://"):
-        return {"type": "base64", "data": image_comp.file[9:]}
-    
-    url = image_comp.url or image_comp.file
-    return await _process_url_string(url)
+    # Priority 1: Local Cached File (AstrBot has already downloaded it)
+    # This solves the Telegram URL inaccessible issue perfectly because we use the local copy.
+    if image_comp.path and os.path.exists(image_comp.path):
+        try:
+            with open(image_comp.path, "rb") as f:
+                data = f.read()
+                b64_str = base64.b64encode(data).decode('utf-8')
+            return {"type": "base64", "data": b64_str}
+        except Exception as e:
+            logger.warning(f"Failed to read local image path {image_comp.path}: {e}")
+
+    # Priority 2: Internal File Attribute (Base64 or Local Path)
+    if image_comp.file:
+        if image_comp.file.startswith("base64://"):
+            return {"type": "base64", "data": image_comp.file[9:]}
+        
+        if image_comp.file.startswith("file:///"):
+            local_path = image_comp.file[8:]
+            if os.path.exists(local_path):
+                try:
+                    with open(local_path, "rb") as f:
+                        data = f.read()
+                        b64_str = base64.b64encode(data).decode('utf-8')
+                    return {"type": "base64", "data": b64_str}
+                except Exception:
+                    pass
+            return {"type": "path", "data": local_path}
+
+    # Priority 3: URL
+    return await _process_url_string(image_comp.url)
 
 async def _process_url_string(url: str):
     if not url:
@@ -81,23 +105,32 @@ async def _process_url_string(url: str):
         else:
             return {"type": "url", "data": url}
     elif url.startswith("http"):
-        # Force download and convert to base64
-        try:
-            # logger.info(f"Downloading image from {url}...")
-            file_path = await download_image_by_url(url)
-            if file_path and os.path.exists(file_path):
-                with open(file_path, "rb") as f:
-                    data = f.read()
-                    b64_str = base64.b64encode(data).decode('utf-8')
-                return {"type": "base64", "data": b64_str}
-        except Exception as e:
-            logger.error(f"Failed to download image from {url}: {e}")
-            # Fallback to URL if download fails
-            return {"type": "url", "data": url}
-            
+        # Smart Logic:
+        # If it's a Telegram API URL or Localhost, the remote MCP server likely CANNOT access it.
+        # In these cases, we MUST download and convert to Base64.
+        # Otherwise, keep it as a URL to be lightweight.
+        
+        is_restricted = "api.telegram.org" in url or "localhost" in url or "127.0.0.1" in url or "0.0.0.0" in url
+        
+        if is_restricted:
+            try:
+                # logger.info(f"Downloading restricted image from {url}...")
+                file_path = await download_image_by_url(url)
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        data = f.read()
+                        b64_str = base64.b64encode(data).decode('utf-8')
+                    return {"type": "base64", "data": b64_str}
+            except Exception as e:
+                logger.error(f"Failed to download image from {url}: {e}")
+                # Fallback to URL
+                return {"type": "url", "data": url}
+        
+        # If it's a standard public URL, return it as is.
         return {"type": "url", "data": url}
+        
     elif url.startswith("file:///"):
-        # For local files, also try convert to base64
+        # Same logic for file protocol in URL string
         try:
             path = url[8:]
             if os.path.exists(path):
