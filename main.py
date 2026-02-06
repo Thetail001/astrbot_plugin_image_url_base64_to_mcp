@@ -6,9 +6,11 @@ from astrbot.api import logger, FunctionTool
 # 注意：我们不再需要导入 GetImageFromContextTool，因为工具逻辑已经移入下方的主类中
 from .tools.image_tool import extract_images_from_event
 
-@register("astrbot_plugin_image_url_base64_to_mcp", "Thetail001", "帮助 MCP 工具从上下文中获取图片 URL 或 Base64 数据。", "1.1.5")
+@register("astrbot_plugin_image_url_base64_to_mcp", "Thetail001", "帮助 MCP 工具从上下文中获取图片 URL 或 Base64 数据。", "1.1.4")
 class ImageContextPlugin(Star):
-    def __init__(self, context: Context, config: dict):
+    # 修改处：将 config 设置为可选参数 (= None)，以修复 missing argument 错误
+    def __init__(self, context: Context, config: dict = None):
+        # 即使 config 为 None，传给父类也是安全的，或者父类会自动处理
         super().__init__(context, config)
         # 移除了 self.context.add_llm_tools(...) 
         # 现在工具通过下方的 @filter.llm_tool 自动注册，并自动绑定到本插件
