@@ -15,30 +15,37 @@ class ImageContextPlugin(Star):
 
     # ==================== 核心修改：将工具定义移入插件类 ====================
     @filter.llm_tool(name="get_image_from_context")
-    async def get_image_from_context(self, event: AstrMessageEvent):
+    async def get_image_from_context(self, event: AstrMessageEvent, return_type: str = "url"):
         """
-        从当前的对话上下文中获取图片。
+        从当前的对话上下文中获取图片数据。
         
-        当需要获取用户发送的图片、或者上下文中的图片 URL/Base64 数据时调用此工具。
+        Args:
+            return_type (string): 返回类型。'url' (默认) 返回图片链接；'base64' 返回用于注入的占位符。
+        Returns:
+            如果成功，返回图片 URL 或 Base64 占位符。如果失败，返回错误信息。
         """
+        # 根据 LLM 的需求决定是否强制转换 Base64
+        prefer_base64 = (return_type == "base64")
+        
         # 调用 tools/image_tool.py 中的逻辑
-        images = await extract_images_from_event(event, prefer_base64=True)
+        images = await extract_images_from_event(event, prefer_base64=prefer_base64)
         
         if not images:
-            return "上下文中未找到图片。"
+            return "Error: 上下文中未找到任何图片。"
         
         # 获取第一张图片
         image_data = images[0]
         img_type = image_data.get('type')
         img_content = image_data.get('data')
 
-        # 如果是 URL，直接返回 URL，这对 LLM 最友好
-        if img_type == 'url':
-            return f"获取成功 (URL): {img_content}"
+        # 逻辑：如果 LLM 要 URL 且我们有 URL
+        if return_type == "url" and img_type == "url":
+            return img_content # 直接返回 URL，LLM 最容易处理
         
-        # 如果是 Base64，考虑到文本长度，通常返回摘要信息
-        # 如果你的特定场景需要直接把 Base64 给 LLM（虽然不推荐作为文本返回），可以去掉 len() 限制
-        return f"获取成功 (Base64): 数据长度 {len(str(img_content))} 字符。类型: {img_type}"
+        # 逻辑：如果 LLM 要 Base64，或者我们只有 Base64
+        # 返回占位符，并引导 LLM 将其传递给其他工具
+        placeholder = "base64://ASTRBOT_PLUGIN_CACHE_PENDING"
+        return f"Success: 图片已准备好。请在调用后续工具时，将图片参数设置为: {placeholder}"
     # ======================================================================
 
     @filter.on_using_llm_tool()
