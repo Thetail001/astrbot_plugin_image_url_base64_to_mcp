@@ -15,12 +15,13 @@ class ImageContextPlugin(Star):
 
     # ==================== 核心修改：将工具定义移入插件类 ====================
     @filter.llm_tool(name="get_image_from_context")
-    async def get_image_from_context(self, event: AstrMessageEvent, return_type: str = "url"):
+    async def get_image_from_context(self, event: AstrMessageEvent, return_type: str = "url", look_back_limit: int = 5):
         """
         从当前的对话上下文中获取图片数据。
         
         Args:
             return_type (string): 返回类型。'url' (默认) 返回图片链接；'base64' 返回用于注入的占位符。
+            look_back_limit (int): 查找历史消息的最大条数。默认为 5。
         Returns:
             如果成功，返回图片 URL 或 Base64 占位符。如果失败，返回错误信息。
         """
@@ -28,7 +29,7 @@ class ImageContextPlugin(Star):
         prefer_base64 = (return_type == "base64")
         
         # 调用 tools/image_tool.py 中的逻辑
-        images = await extract_images_from_event(event, prefer_base64=prefer_base64)
+        images = await extract_images_from_event(event, look_back_limit=look_back_limit, prefer_base64=prefer_base64)
         
         if not images:
             return "Error: 上下文中未找到任何图片。"
