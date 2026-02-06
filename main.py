@@ -8,8 +8,8 @@ from .tools.image_tool import extract_images_from_event
 
 @register("astrbot_plugin_image_url_base64_to_mcp", "Thetail001", "帮助 MCP 工具从上下文中获取图片 URL 或 Base64 数据。", "1.1.5")
 class ImageContextPlugin(Star):
-    def __init__(self, context: Context, config: dict ):
-        super().__init__(context, config)
+    def __init__(self, context: Context):
+        super().__init__(context)
         # 移除了 self.context.add_llm_tools(...) 
         # 现在工具通过下方的 @filter.llm_tool 自动注册，并自动绑定到本插件
 
