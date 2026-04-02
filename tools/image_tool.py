@@ -7,7 +7,7 @@ import base64
 import os
 import asyncio
 
-async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5, prefer_base64: bool = False):
+async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: int = 5, prefer_base64: bool = False, context=None):
     images = []
     
     if event.message_obj and event.message_obj.message:
@@ -19,8 +19,9 @@ async def extract_images_from_event(event: AstrMessageEvent, look_back_limit: in
     if images: return images
 
     try:
-        ctx = event.context
-        conv_mgr = ctx.conversation_manager
+        if context is None:
+            return images
+        conv_mgr = context.conversation_manager
         uid = event.unified_msg_origin
         curr_cid = await conv_mgr.get_curr_conversation_id(uid)
         conversation = await conv_mgr.get_conversation(uid, curr_cid)

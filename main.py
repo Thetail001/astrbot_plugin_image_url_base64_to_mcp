@@ -29,7 +29,7 @@ class ImageContextPlugin(Star):
         prefer_base64 = (return_type == "base64")
         
         # 调用 tools/image_tool.py 中的逻辑
-        images = await extract_images_from_event(event, look_back_limit=look_back_limit, prefer_base64=prefer_base64)
+        images = await extract_images_from_event(event, look_back_limit=look_back_limit, prefer_base64=prefer_base64, context=self.context)
         
         if not images:
             return "Error: 上下文中未找到任何图片。"
@@ -80,7 +80,7 @@ class ImageContextPlugin(Star):
             logger.info(f"[ImageContextPlugin] Intercepting tool '{tool.name}'. Injecting image data...")
             
             # Hook phase: We MUST force download/convert to Base64 to satisfy MCP
-            images = await extract_images_from_event(event, prefer_base64=True)
+            images = await extract_images_from_event(event, prefer_base64=True, context=self.context)
             if images:
                 img_data = images[0]['data']
                 img_type = images[0]['type']
@@ -98,5 +98,5 @@ class ImageContextPlugin(Star):
     @filter.command("test_get_image")
     async def test_get_image(self, event: AstrMessageEvent):
         """测试命令：检查是否能从当前消息提取图片"""
-        images = await extract_images_from_event(event)
+        images = await extract_images_from_event(event, context=self.context)
         yield event.plain_result(f"Found images: {len(images)}")
